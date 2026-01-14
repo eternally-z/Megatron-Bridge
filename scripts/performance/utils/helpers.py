@@ -243,7 +243,7 @@ def set_user_overrides(recipe: ConfigContainer, kwargs: Dict[str, Any]) -> None:
         recipe.model.pipeline_model_parallel_size = kwargs.get("pipeline_model_parallel_size")
     if kwargs.get("context_parallel_size") is not None:
         recipe.model.context_parallel_size = kwargs.get("context_parallel_size")
-    if kwargs.get("virtual_pipeline_model_parallel_size") is not None:
+    if kwargs.get("virtual_pipeline_model_parallel_size") != -1:
         recipe.model.virtual_pipeline_model_parallel_size = kwargs.get("virtual_pipeline_model_parallel_size")
     if kwargs.get("expert_model_parallel_size") is not None:
         recipe.model.expert_model_parallel_size = kwargs.get("expert_model_parallel_size")
@@ -260,6 +260,18 @@ def set_user_overrides(recipe: ConfigContainer, kwargs: Dict[str, Any]) -> None:
     if kwargs.get("megatron_ckpt") is not None:
         recipe.checkpoint.pretrained_checkpoint = "/mnt/megatron_ckpt"
 
+    if kwargs.get("hidden_size") is not None:
+        recipe.model.hidden_size = kwargs.get("hidden_size")
+    if kwargs.get("num_layers") is not None:
+        recipe.model.num_layers = kwargs.get("num_layers")
+    if kwargs.get("pipeline_model_parallel_layout") is not None:
+        recipe.model.pipeline_model_parallel_layout = kwargs.get("pipeline_model_parallel_layout")
+    if kwargs.get("first_k_dense_replace") is not None:
+        recipe.model.first_k_dense_replace = kwargs.get("first_k_dense_replace")
+    if kwargs.get("num_layers") is not None and kwargs.get("first_k_dense_replace") is not None:
+        recipe.model.moe_layer_freq = [0] * kwargs.get("first_k_dense_replace") + [1] * (
+            kwargs.get("num_layers") - kwargs.get("first_k_dense_replace")
+        )
     # Handle checkpoint configuration
     checkpoint_dir = kwargs.get("checkpoint_dir")
     checkpoint_interval = kwargs.get("checkpoint_interval")
