@@ -810,7 +810,8 @@ class MegatronModelBridge(Generic[HFPreTrained, ModelProviderTarget, MegatronMod
 
         description = f"Loading from {hf_pretrained.model_name_or_path}"
 
-        capture_unquantized_state_dict = True
+        # if export_fp8_weights is true,we need save the unquantized state dict for initializing optimizer main params
+        capture_unquantized_state_dict = getattr(self, "export_fp8_weights", False)
         # Optional: capture per-rank, per-parameter unquantized shards for initializing
         # for loading original weights when fp8_param=True.
         captured_state_dicts: dict[str, torch.Tensor] | None = (
@@ -999,10 +1000,7 @@ class MegatronModelBridge(Generic[HFPreTrained, ModelProviderTarget, MegatronMod
 
         # Use provided conversion tasks or build them
         if conversion_tasks is None:
-            # NOTE: temporarily use our fp8 export tasks
-            # TODO: need a param from caller to control which tasks to use
-            # conversion_tasks = self.build_conversion_tasks(hf_pretrained, megatron_model)
-            conversion_tasks = self.build_export_fp8_tasks(hf_pretrained, megatron_model)
+            conversion_tasks = self.build_conversion_tasks(hf_pretrained, megatron_model)
 
         # Collect adapter conversion tasks
         adapter_tasks_by_base = self.build_adapter_conversion_tasks(megatron_model)
