@@ -17,6 +17,7 @@ import contextlib
 import fnmatch
 import itertools
 import logging
+import math
 import re
 from dataclasses import dataclass
 from typing import (
@@ -1134,6 +1135,41 @@ class MegatronModelBridge(MegatronPeftBridge, Generic[HFPreTrained, ModelProvide
 
         return global_fp8_flags
 
+    def _trim_blockwise_fp8_scale_inv_padding(
+        self,
+        local_weights: Optional[torch.Tensor],
+        scale_tensor: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        if scale_tensor is None or local_weights is None:
+            return scale_tensor
+        if not isinstance(scale_tensor, torch.Tensor) or scale_tensor.ndim != 2:
+            return scale_tensor
+
+        quantizer = getattr(local_weights, "_quantizer", None)
+        block_len = getattr(quantizer, "block_len", None)
+        is_2d_scaled = getattr(local_weights, "_is_2D_scaled", None)
+        if block_len is None or is_2d_scaled is None:
+            return scale_tensor
+
+        try:
+            shape = local_weights.shape
+            if not shape:
+                return scale_tensor
+            q_k = shape[-1]
+            q_m = math.prod(shape[:-1]) if len(shape) > 1 else 1
+        except Exception:
+            return scale_tensor
+
+        if is_2d_scaled:
+            expected_k_tiles = math.ceil(q_k / block_len)
+            if scale_tensor.shape[1] > expected_k_tiles:
+                return scale_tensor[:, :expected_k_tiles].contiguous()
+            return scale_tensor
+
+        if scale_tensor.shape[1] > q_m:
+            return scale_tensor[:, :q_m].contiguous()
+        return scale_tensor
+
     def build_export_fp8_tasks(
         self,
         hf_pretrained: HFPreTrained,
@@ -1229,6 +1265,10 @@ class MegatronModelBridge(MegatronPeftBridge, Generic[HFPreTrained, ModelProvide
                     scale_tensor = None
                     if local_weights is not None and hasattr(local_weights, fp8_scale_inv_attr):
                         scale_tensor = getattr(local_weights, fp8_scale_inv_attr)
+                        scale_tensor = self._trim_blockwise_fp8_scale_inv_padding(
+                            local_weights,
+                            scale_tensor,
+                        )
 
                     # Note:
                     # Do NOT reuse the same mapping instance as the base weight task.
