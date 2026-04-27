@@ -769,12 +769,26 @@ class AutoBridge(Generic[MegatronModelT]):
         if dist.is_available() and dist.is_initialized():
             dist.barrier()
         dispatch_instance = (self._causal_lm_architecture, self._get_model_instance(model))
+        conversion_tasks = None
+        register_fp8_scale_inv_with_base_weight = False
+        # Build conversion tasks based on export_weight_dtype configuration
+        if self.export_weight_dtype == "fp8":
+            if not isinstance(model, list):
+                model = [model]
+            self._validate_fp8_export_config(model)
+            # Use FP8 export tasks for blockwise FP8 weights
+            conversion_tasks = self._model_bridge.build_export_fp8_tasks(self.hf_pretrained, model)
+            register_fp8_scale_inv_with_base_weight = True
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.warning("FP8 export tasks built for fp8 ckpts")
         generator = model_bridge.stream_weights_megatron_to_hf(
             dispatch_instance,
             model,
             self.hf_pretrained,
             cpu=True,
             show_progress=show_progress,
+            conversion_tasks=conversion_tasks,
             merge_adapter_weights=merge_adapter_weights,
         )
         model_instance = self._get_model_instance(model)
@@ -803,6 +817,7 @@ class AutoBridge(Generic[MegatronModelT]):
                 strict=strict,
                 distributed_save=distributed_save,
                 save_every_n_ranks=save_every_n_ranks,
+                register_fp8_scale_inv_with_base_weight=register_fp8_scale_inv_with_base_weight,
             )
         else:
             # Config-only path: shard and write safetensors directly

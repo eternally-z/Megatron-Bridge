@@ -35,6 +35,7 @@ from typing import (
 
 import torch
 
+_FP8_DTYPES = {torch.float8_e4m3fn, torch.float8_e5m2}
 
 logger = logging.getLogger(__name__)
 
@@ -679,6 +680,7 @@ class SafeTensorsStateSource(StateSource):
         strict: bool = True,
         distributed_save: bool = False,
         save_every_n_ranks: int = 1,
+        register_fp8_scale_inv_with_base_weight: bool = False,
     ):
         """
         Saves tensors from a generator to `.safetensors` files, preserving the
@@ -709,7 +711,7 @@ class SafeTensorsStateSource(StateSource):
         """
         if distributed_save:
             return self._save_generator_distributed(
-                generator, output_path, strict, save_every_n_ranks=save_every_n_ranks
+                generator, output_path, strict, save_every_n_ranks=save_every_n_ranks,register_fp8_scale_inv_with_base_weight=register_fp8_scale_inv_with_base_weight,
             )
 
         # In a distributed environment, only rank 0 should write to disk.
@@ -749,6 +751,21 @@ class SafeTensorsStateSource(StateSource):
 
         for name, tensor in generator:
             all_yielded_keys.add(name)
+
+            if (
+                register_fp8_scale_inv_with_base_weight
+                and name in key_to_filename_map
+                and tensor.dtype in _FP8_DTYPES
+            ):
+                scale_inv_name = f"{name}_scale_inv"
+                if scale_inv_name not in key_to_filename_map:
+                    filename = key_to_filename_map[name]
+                    key_to_filename_map[scale_inv_name] = filename
+                    all_expected_keys.add(scale_inv_name)
+                    filename_to_keys_map[filename].add(scale_inv_name)
+                    if filename in files_to_save:
+                        files_to_save[filename].add(scale_inv_name)
+            
             if name not in all_expected_keys:
                 if strict:
                     raise KeyError(
@@ -873,6 +890,7 @@ class SafeTensorsStateSource(StateSource):
         output_path: Union[str, Path],
         strict: bool = True,
         save_every_n_ranks: int = 1,
+        register_fp8_scale_inv_with_base_weight: bool = False,
     ):
         is_distributed = torch.distributed.is_available() and torch.distributed.is_initialized()
         if is_distributed:
@@ -941,6 +959,20 @@ class SafeTensorsStateSource(StateSource):
 
         for name, tensor in generator:
             all_yielded_keys.add(name)
+
+            if (
+                register_fp8_scale_inv_with_base_weight
+                and name in key_to_filename_map
+                and tensor.dtype in _FP8_DTYPES
+            ):
+                scale_inv_name = f"{name}_scale_inv"
+                if scale_inv_name not in key_to_filename_map:
+                    fname = key_to_filename_map[name]
+                    key_to_filename_map[scale_inv_name] = fname
+                    all_expected_keys.add(scale_inv_name)
+                    filename_to_keys_map[fname].add(scale_inv_name)
+                    if fname in assigned_filenames_set:
+                        assigned_expected_keys.add(scale_inv_name)
 
             if name not in all_expected_keys:
                 if strict:

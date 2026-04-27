@@ -91,6 +91,21 @@ class HFWeightTuple(NamedTuple):
     weight: torch.Tensor
 
 
+def _dequant_fp8_blockwise(weight: torch.Tensor, scale_inv: torch.Tensor) -> torch.Tensor:
+    """Block-wise FP8 dequantization: out = fp8_val * scale_inv per 128x128 block."""
+    M, N = weight.shape
+    _FP8_BLOCK_SIZE = 128
+    B = _FP8_BLOCK_SIZE
+    w = weight.float()
+    out = torch.empty_like(w)
+    sM, sN = scale_inv.shape
+    for bi in range(sM):
+        for bj in range(sN):
+            r0, r1 = bi * B, min((bi + 1) * B, M)
+            c0, c1 = bj * B, min((bj + 1) * B, N)
+            out[r0:r1, c0:c1] = w[r0:r1, c0:c1] * scale_inv[bi, bj]
+    return out.to(torch.bfloat16)
+
 @dataclass(frozen=True)
 class WeightConversionTask(Generic[MappingT]):
     """A unified task for converting weights between HuggingFace and Megatron formats.
@@ -725,6 +740,15 @@ class MegatronModelBridge(MegatronPeftBridge, Generic[HFPreTrained, ModelProvide
             for task in tasks:
                 yield task
 
+    def _load_and_dequant(self, key: str, hf_state_dict: Mapping[str, torch.Tensor]) -> torch.Tensor:
+        w = hf_state_dict[key]
+        if w.dtype not in (torch.float8_e4m3fn, torch.float8_e5m2):
+            return w
+        sinv_key = key + "_scale_inv"
+        if w.ndim == 2 and sinv_key in hf_state_dict:
+            return _dequant_fp8_blockwise(w, hf_state_dict[sinv_key])
+        return w.float().to(torch.bfloat16)
+    
     def maybe_modify_loaded_hf_weight(
         self, hf_param: str | dict[str, str], hf_state_dict: Mapping[str, torch.Tensor]
     ) -> torch.Tensor:
@@ -743,9 +767,9 @@ class MegatronModelBridge(MegatronPeftBridge, Generic[HFPreTrained, ModelProvide
             The loaded weights.
         """
         if isinstance(hf_param, str):
-            hf_weights = hf_state_dict[hf_param]
+            hf_weights = self._load_and_dequant(hf_param, hf_state_dict)
         else:
-            hf_weights = {k: hf_state_dict[v] for k, v in hf_param.items()}
+            hf_weights = {k: self._load_and_dequant(v, hf_state_dict) for k, v in hf_param.items()}
         return hf_weights
 
     def maybe_modify_converted_hf_weight(
